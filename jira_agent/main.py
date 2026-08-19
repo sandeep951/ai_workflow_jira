@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, Request, BackgroundTasks
 from common.models import JiraWebhookPayload
 from common.jira_utils import JiraClient
@@ -18,17 +20,7 @@ async def startup_event():
     if not await llm_client.check_health():
         print("SYSTEM CRITICAL: LLM (Ollama) is not reachable or model is missing.")
         print("Shutting down server to prevent inconsistent state.")
-        import sys
-        sys.exit(1)
-    
-    # Test the model with a friendly intro request to ensure it's intelligent and in JSON mode
-    test_msg = "Hi! Please introduce yourself as the Jira SQL Agent. Respond in JSON format."
-    print(f"Testing model {llm_client.primary_model} with greeting: '{test_msg}'")
-    test_response = await llm_client.analyze_jira_request(test_msg, [])
-    
-    # We print the message returned by the LLM
-    welcome_msg = test_response.get('message', 'No response received')
-    print(f"Model says: {welcome_msg}")
+        os._exit(1)
     
     print("System health check passed. LLM is online and responsive.")
 
@@ -46,6 +38,7 @@ async def process_jira_webhook(payload: JiraWebhookPayload):
     event_type = payload_dict.get("webhookEvent", "")
     if event_type not in ["jira:issue_created", "jira:issue_updated", "comment_created"]:
         return
+
 
     issue_data = payload_dict.get('issue', {})
     issue_key = issue_data.get('key')

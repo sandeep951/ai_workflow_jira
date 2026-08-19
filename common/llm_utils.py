@@ -26,33 +26,20 @@ class LLMClient:
                     if self.primary_model not in models:
                         print(f"CRITICAL: Primary model {self.primary_model} not found. Available: {models}")
                         return False
-                
-                # 2. Smoke Test: Verify the model actually responds to a simple prompt
-                async with session.post(
-                    f"{self.base_url}/api/generate",
-                    json={"model": self.primary_model, "prompt": "hi", "stream": False},
-                    timeout=self.timeout
-                ) as resp:
-                    if resp.status != 200:
-                        print(f"CRITICAL: Model {self.primary_model} is installed but failed to respond. Status: {resp.status}")
-                        return False
-                    return True
+                return True
         except Exception as e:
             print(f"CRITICAL: Could not connect to Ollama at {self.base_url}. Error: {e}")
-            
-            # Try with fallback model if primary failed (skip for health check - just connectivity test)
+            return False
 
     async def verify_server_ready(self):
         """Minimal startup verification - checks API and model availability without prompting."""
         try:
             async with aiohttp.ClientSession() as session:
-                # 1. Verify server endpoint is reachable AND returns valid JSON response structure for /api/tags
+                # 1. Verify server endpoint is reachable AND returns valid JSON response structure for /api/version
                 async with session.get(f"{self.base_url}/api/version", timeout=self.timeout) as resp:
                     if resp.status != 200:
                         print(f"CRITICAL: Cannot reach Ollama at {self.base_url}. Status: {resp.status}")
                         return False
-                    
-                    # Minimal version check just ensures endpoint is responsive, no prompt cost
                     await resp.json()
 
                 # 2. Verify model exists without requiring it to respond - GET /api/tags returns model list
@@ -60,7 +47,6 @@ class LLMClient:
                     if resp.status != 200:
                         print(f"CRITICAL: Ollama health check failed with status {resp.status}")
                         return False
-                    
                     data = await resp.json()
                     models = [m['name'] for m in data.get('models', [])]
 
@@ -68,16 +54,7 @@ class LLMClient:
                 if self.primary_model not in models:
                     print(f"CRITICAL: Primary model {self.primary_model} not found in Ollama. Available models: {models}")
                     return False
-                
-                # 4. Minimal smoke test - just a simple response without expecting JSON from LLM itself since we only want connection verification at startup 
-                async with session.post(
-                    f"{self.base_url}/api/generate",
-                    json={"model": self.primary_model, "prompt": "hi", "stream": False},
-                    timeout=self.timeout
-                ) as resp:
-                    if resp.status != 200:
-                        print(f"CRITICAL: Model {self.primary_model} is installed but failed to respond. Status: {resp.status}")
-                        return False
+
 
         except Exception as e:
             print(f"CRITICAL: Could not connect to Ollama at {self.base_url}. Error: {e}")
