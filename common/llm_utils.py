@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import json
+import traceback
 from common.config import Config
 from common.db_config import AUTHORIZED_DATABASES
 from common.prompts import PROMPTS
@@ -67,6 +68,7 @@ class LLMClient:
                 return await self._call_ollama(model_name, description, comments)
             except Exception as e:
                 print(f"Attempt with {model_name} failed: {e}")
+                traceback.print_exc()
                 continue
 
         return {
@@ -86,9 +88,17 @@ class LLMClient:
                     query=query,
                     result=result
                 )
-                return await self._call_ollama_raw(model_name, prompt)
+                response = await self._call_ollama_raw(model_name, prompt)
+                
+                # Split response into CSV and Comment sections
+                if "## Jira Comment" in response:
+                    parts = response.split("## Jira Comment")
+                    return parts[1].strip()
+                
+                return response
             except Exception as e:
                 print(f"Attempt with {model_name} failed: {e}")
+                traceback.print_exc()
                 continue
         return f"⚙️ DB Agent: Error formatting result. Raw: {result}"
 

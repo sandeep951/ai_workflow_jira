@@ -1,4 +1,5 @@
 from tests.dummy_oracle import DummyOracleDB
+import os
 from common.jira_utils import JiraClient
 from common.config import Config
 from common.llm_utils import LLMClient
@@ -40,6 +41,28 @@ class DBAgent:
         
         # 3. Use LLM to format the result
         formatted_message = await self.llm_client.format_db_result(db_name, query, result)
+        
+        # 4. Handle CSV Attachment if result was successful
+        if result.get('status') == 'success' and result.get('data'):
+            import csv
+            import tempfile
+            
+            # Create a temporary CSV file
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', newline='') as tmp:
+                writer = csv.writer(tmp)
+                writer.writerow(result['columns'])
+                writer.writerows(result['data'])
+                csv_path = tmp.name
+            
+            try:
+                self.jira_client.upload_attachment(issue_key, csv_path)
+                # Removed duplicate attachment notification since LLM now includes it in the formatted message
+            except Exception as e:
+                print(f"DB Agent: Failed to upload CSV: {e}")
+            finally:
+                if os.path.exists(csv_path):
+                    os.remove(csv_path)
+
         self.jira_client.add_comment(issue_key, formatted_message)
         
         # Close Jira issue regardless of success or failure to end the workflow
