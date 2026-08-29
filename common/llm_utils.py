@@ -3,6 +3,7 @@ import asyncio
 import json
 from common.config import Config
 from common.db_config import AUTHORIZED_DATABASES
+from common.prompts import PROMPTS
 
 class LLMClient:
     def __init__(self):
@@ -76,30 +77,47 @@ class LLMClient:
             "message": "All available LLM models failed to respond."
         }
 
+    async def format_db_result(self, db_name: str, query: str, result: any):
+        """Sends the raw DB result to the LLM to be formatted into a user-friendly message."""
+        for model_name in [self.primary_model, self.fallback_model]:
+            try:
+                prompt = PROMPTS["format_db_result"].format(
+                    db_name=db_name,
+                    query=query,
+                    result=result
+                )
+                return await self._call_ollama_raw(model_name, prompt)
+            except Exception as e:
+                print(f"Attempt with {model_name} failed: {e}")
+                continue
+        return f"⚙️ DB Agent: Error formatting result. Raw: {result}"
+
+    async def _call_ollama_raw(self, model: str, prompt: str):
+        """Helper to get a raw string response from LLM without JSON parsing."""
+        print(f"\n--- DEBUG: Sending Raw Prompt to LLM ({model}) ---\n{prompt}\n--- END DEBUG ---\n")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{self.base_url}/api/generate",
+                json={"model": model, "prompt": prompt, "stream": False},
+                timeout=self.timeout
+            ) as resp:
+                if resp.status != 200:
+                    raise Exception(f"Ollama returned status {resp.status}")
+                result = await resp.json()
+                response_text = result.get("response", "").strip()
+                print(f"--- DEBUG: LLM Response ({model}) ---\n{response_text}\n--- END DEBUG ---\n")
+                return response_text
+
     async def _call_ollama(self, model: str, description: str, comments: list):
-        # Extract only the body text from comments to reduce noise
-        comment_texts = [c.get('body', '') if isinstance(c, dict) else str(c) for c in comments]
+        # Extract only the body text from the latest 3 comments to reduce noise and tokens
+        latest_comments = comments[-3:] if comments else []
+        comment_texts = [c.get('body', '') if isinstance(c, dict) else str(c) for c in latest_comments]
         formatted_comments = "\n".join([f"- {text}" for text in comment_texts])
 
-        prompt = (
-            f"Analyze the following Jira request. Look for the SQL query and Database name across BOTH the description and the comments.\n\n"
-            f"Description: {description}\n"
-            f"Comments:\n{formatted_comments}\n\n"
-            f"You are an authorized SQL Agent. "
-            f"Authorized Databases: {', '.join(AUTHORIZED_DATABASES)}\n\n"
-            f"1. If the request is a greeting (e.g., 'Hi', 'Hello'), respond with a friendly welcome message "
-            f"introducing yourself as the Jira SQL Agent and set 'verified' to false.\n"
-            f"2. If the request is a DB query, extract the DB name and SQL query. "
-            f"The user might provide the DB name in the description and the SQL in a comment, or vice versa. Combine all available information.\n"
-            f"Check if the DB name is one of the authorized ones listed above. "
-            f"Check if it is a SELECT query and if it contains a WHERE clause for safety. "
-            f"If DB is authorized, query is SELECT, and WHERE is present, set 'verified' to true. "
-            f"Otherwise, set 'verified' to false and write a polite explanation of what is missing or why it was rejected.\n\n"
-            f"You MUST respond ONLY with a valid raw JSON object. "
-            f"Do NOT include any conversational text, explanations, or markdown code blocks. "
-            f"Required keys: 'verified', 'db_name', 'sql_query', 'message'."
+        prompt = PROMPTS["analyze_jira_request"].format(
+            description=description,
+            formatted_comments=formatted_comments
         )
-        
         print(f"\n--- DEBUG: Sending Prompt to LLM ({model}) ---\n{prompt}\n--- END DEBUG ---\n")
 
         async with aiohttp.ClientSession() as session:
@@ -134,3 +152,4 @@ class LLMClient:
                         "sql_query": "",
                         "message": f"LLM returned invalid JSON format: {response_text[:100]}..."
                     }
+

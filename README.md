@@ -8,30 +8,27 @@ This project implements an automated workflow using Python and FastAPI to handle
 ### Phase 1: Request Intake & Validation
 1. **Jira Webhook**: FastAPI receives notifications when a Jira ticket is created or updated.
 2. **LLM Verification**:
-   - The system reads the Jira description and comments.
-   - The LLM verifies if the ticket is in 'New' state.
+   - The system reads the Jira description and latest 3 comments.
+   - The LLM verifies if the ticket is in 'New' or 'Open' state.
    - The LLM extracts the **DB Name** and **SQL Query**.
 3. **Validation Logic**:
    - Ensures the SQL statement is a `SELECT` query.
-   - Checks for a `WHERE` clause. If missing, the ticket is moved to 'Hold' state, and a comment is added asking for a specific filter.
-4. **Hold State Management**:
-   - Daily checks for tickets in 'Hold' state.
-   - Post a reminder comment every 24 hours.
-   - If the user updates the description and it meets criteria, move to Phase 2.
-   - If no update for 3 consecutive days, the AI agent closes the Jira ticket.
+   - Checks for a `WHERE` clause. If missing, the ticket stays in its current state and a polite explanation is posted as a comment.
+4. **Handover**:
+   - Valid requests are transitioned to the 'To Do' state.
+   - A notification comment is posted confirming verification and handover to the DB Agent.
 
 ### Phase 2: Execution & Response
-1. **Transition**: Valid requests are moved to 'In Progress' state.
-2. **DB Agent Delegation**:
-   - The Jira API agent assigns the task to a DB Agent.
-   - DB Agent connects to a dummy Oracle DB server and executes the query.
+1. **State Verification**: The DB Agent verifies the ticket is in 'To Do' state.
+2. **Execution**:
+   - Ticket is transitioned to 'In Progress'.
+   - DB Agent executes the query against the dummy Oracle DB.
 3. **Result Handling**:
-   - Query results are sent back to the Jira API agent.
-   - Results are posted as a comment on the Jira ticket.
-   - Ticket state is moved to 'Review'.
+   - Raw results are sent back to the LLM to be transformed into a user-friendly response.
+   - The professional response is posted as a comment on the Jira ticket.
+   - Ticket state is transitioned to 'Closed' (regardless of success or failure to prevent loops).
 4. **Notification**:
-   - An email is sent to the user notifying them that the result is ready.
-   - The user is requested to review and close the ticket manually.
+   - If successful, an email is sent to the user notifying them that the result is ready.
 
 ## Technical Stack
 - **Language**: Python 3.10+

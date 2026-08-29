@@ -5,13 +5,11 @@ from common.models import JiraWebhookPayload
 from common.jira_utils import JiraClient
 from common.llm_utils import LLMClient
 from common.config import Config
-from common.email_utils import EmailClient
 from db_agent.main import DBAgent
 
 app = FastAPI(title="Jira AI Agent Workflow")
 jira_client = JiraClient()
 llm_client = LLMClient()
-email_client = EmailClient()
 db_agent = DBAgent()
 
 @app.on_event("startup")
@@ -25,10 +23,10 @@ async def startup_event():
     print("System health check passed. LLM is online and responsive.")
 
 # Transition IDs (These should be configured in Config)
-TRANSITION_HOLD = "101" 
-TRANSITION_IN_PROGRESS = "102"
-TRANSITION_CLOSED = "103"
-TRANSITION_REVIEW = "104"
+TRANSITION_TO_DO = "11" 
+TRANSITION_IN_PROGRESS = "21"
+TRANSITION_CLOSED = "51"
+TRANSITION_REVIEW = "31"
 
 async def process_jira_webhook(payload: JiraWebhookPayload):
     # Convert Pydantic model to dictionary to use .get()
@@ -50,23 +48,23 @@ async def process_jira_webhook(payload: JiraWebhookPayload):
     status_name = status_obj.get('name', '') if isinstance(status_obj, dict) else ''
     
     # 2. State Gatekeeper: Only process if the ticket is in a 'starting' state
-    # We only want to trigger the AI if the ticket is 'To Do' or 'New'
-    if status_name not in ["To Do", "New", "Open"]:
-        print(f"Issue {issue_key} is in state '{status_name}'. Skipping processing.")
+    # IMPORTANT: To prevent rework and infinite loops, only trigger if status is exactly 'New' or 'Open'.
+    # Once it moves to 'To Do', the DB Agent takes over and this agent should NOT touch it again.
+    if status_name not in ["New", "Open"]:
+        print(f"Issue {issue_key} is in state '{status_name}'. Only 'New' or 'Open' tickets are processed by Jira AI Agent. Skipping.")
         return
+
+    # Additionally, if it has already transitioned to IN_PROGRESS or REVIEW/CLOSED, don't re-process.
+    if status_name in ["In Progress", "Review", "Closed", "To Do"]:
+         print(f"Issue {issue_key} is already in a processed or transitioned state ({status_name}). Skipping.")
+         return
 
     # Simplification: In a real scenario, fetch comments via API
     comments = jira_client.get_comments(issue_key)
     
     # 3. Duplicate Response Gatekeeper: Don't respond if the AI already has
     ai_signature = "🤖 AI Agent"
-    # If it's a comment event, only process if the LATEST comment isn't from the AI
-    if event_type == "comment_created":
-        last_comment = comments[-1] if comments else {}
-        if ai_signature in last_comment.get('body', ''):
-            print(f"Issue {issue_key} latest comment is from AI. Skipping to avoid loop.")
-            return
-    elif any(ai_signature in comment.get('body', '') for comment in comments):
+    if any(ai_signature in comment.get('body', '') for comment in comments):
         print(f"Issue {issue_key} already has a response from the AI agent. Skipping to avoid duplicates.")
         return
     
@@ -89,42 +87,34 @@ async def process_jira_webhook(payload: JiraWebhookPayload):
 
     if is_verified:
         print(f"✅ Request verified for {issue_key}. Querying {db_name}...")
-        # Move to Phase 2
-        jira_client.add_comment(issue_key, f"🤖 AI Agent: {message}")
-        jira_client.update_issue_status(issue_key, TRANSITION_IN_PROGRESS)
         
-        # DB Agent Execution
-        db_result = db_agent.run_query(db_name, sql_query)
+        # 1. Ensure ticket is in 'To Do' state FIRST
+        # This is critical because the DB Agent verifies this state before running
+        print(f"Moving {issue_key} to 'To Do' state...")
+        jira_client.update_issue_status(issue_key, TRANSITION_TO_DO) # Transition to To Do
+        
+        # 2. Combined notification: verification and handover
+        jira_client.add_comment(issue_key, f"🤖 Jira AI Agent: {message}\n\nRequest verified. Handing over to DB Agent for execution.")
+        
+        # 3. DB Agent Execution
+        db_result = await db_agent.run_query(db_name, sql_query, issue_key=issue_key)
         
         if db_result["status"] == "success":
-            # Format the result as a table/text for Jira
-            columns = ", ".join(db_result["columns"])
-            data_rows = "\n".join([str(row) for row in db_result["data"]])
-            formatted_result = f"📊 Query Result:\nColumns: {columns}\nData:\n{data_rows}"
-            
-            print(f"🚀 Posting results to {issue_key}")
-            jira_client.add_comment(issue_key, formatted_result)
-            jira_client.update_issue_status(issue_key, TRANSITION_REVIEW)
-            
-            # Send Email Notification
-            user_email = "user@example.com" # In real case, fetch from Jira issue
-            email_client.send_email(
-                user_email, 
-                f"Jira {issue_key} Result Ready", 
-                f"The result for your SQL query on {analysis['db_name']} is now available in Jira ticket {issue_key}. Please review and close the ticket."
-            )
+            # The DB Agent has already posted the LLM-formatted result as a comment.
+            # We only need to handle the final state transition.
+            pass
         else:
             # Handle Query Error
-            print(f"⚠️ Query failed for {issue_key}: {db_result['message']}")
-            jira_client.add_comment(issue_key, f"❌ Query Execution Error: {db_result['message']}")
-            jira_client.update_issue_status(issue_key, TRANSITION_HOLD)
+            # The DB Agent already posted a formatted LLM error comment, 
+            # so we no longer post a duplicate 'Query Execution Error' comment here.
+            print(f"⚠️ Query failed for {issue_key}, DB Agent has already posted the error.")
             
     else:
         print(f"🛑 Request rejected for {issue_key}: {message}")
         # Move to Hold state
         # Use the custom message generated by the LLM instead of static text
         jira_client.add_comment(issue_key, f"🤖 AI Agent: {message}")
-        jira_client.update_issue_status(issue_key, TRANSITION_HOLD)
+        print(f"Request for {issue_key} rejected. Leaving ticket for user review.")
 
 @app.post("/webhook/jira")
 async def jira_webhook(payload: JiraWebhookPayload, background_tasks: BackgroundTasks):
