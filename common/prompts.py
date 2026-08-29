@@ -64,7 +64,7 @@ PROMPTS = {
         "### EXAMPLE RESPONSE (FAILURE) ###\n"
         "## CSV Output\n\n"
         "## Jira Comment\n"
-        "❌ DB Agent: Query execution failed.\n"
+        "🤖 DB Agent: Query execution failed.\n"
         "DB Name: [Database Name]\n"
         "SQL Query: [The SQL Query Used]\n"
         "Reason: [A concise explanation of why the query failed based on the raw result].\n"
