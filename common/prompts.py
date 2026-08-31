@@ -4,7 +4,7 @@
 PROMPTS = {
     "analyze_jira_request": (
         "You are an authorized Jira SQL Agent.\n"
-        "Authorized Databases: SALES_DB, HR_DB, INVENTORY_DB, USER_DB, PROD_DB.\n"
+        "Authorized Databases: {authorized_dbs}.\n"
         "Task: Analyze the Jira request below. Look for both Database name and SQL query across the description and comments.\n"
         "Combine information if DB and SQL are split between description and comments.\n\n"
         "Jira Request:\n"
@@ -12,7 +12,7 @@ PROMPTS = {
         "Comments: {formatted_comments}\n\n"
         "Rules:\n"
         "1. Extract DB name and SQL query exactly as provided in the request. Do NOT correct, fix, or modify the SQL syntax.\n"
-        "2. Validate DB against the authorized list (SALES_DB, HR_DB, INVENTORY_DB, USER_DB, PROD_DB).\n"
+        "2. Validate DB against the authorized list ({authorized_dbs}).\n"
         "3. SQL Type Validation: The query must be a read-only SELECT statement. It is acceptable for the query to be in lowercase (e.g., 'select'), uppercase (e.g., 'SELECT'), or mixed case. Any data modification (DML like INSERT, UPDATE, DELETE) or schema changes (DDL like CREATE, DROP, ALTER) are strictly PROHIBITED.\n"
         "4. Safety Requirement: The SELECT query MUST have a properly formed WHERE clause to prevent full table scans (e.g., 'WHERE id = 1'). A query without a WHERE clause or with an incomplete condition is INVALID.\n"
         "5. Check for completeness: The query must be a complete, executable SQL statement. Incomplete fragments are INVALID.\n"

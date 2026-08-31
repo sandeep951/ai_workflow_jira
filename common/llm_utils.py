@@ -126,7 +126,8 @@ class LLMClient:
 
         prompt = PROMPTS["analyze_jira_request"].format(
             description=description,
-            formatted_comments=formatted_comments
+            formatted_comments=formatted_comments,
+            authorized_dbs=", ".join(AUTHORIZED_DATABASES)
         )
         print(f"\n--- DEBUG: Sending Prompt to LLM ({model}) ---\n{prompt}\n--- END DEBUG ---\n")
 

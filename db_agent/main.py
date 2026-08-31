@@ -1,12 +1,13 @@
-from tests.dummy_oracle import DummyOracleDB
 import os
+import shlex
 from common.jira_utils import JiraClient
 from common.config import Config
 from common.llm_utils import LLMClient
+from common.db_config import DB_SSH_CONFIGS
+from common.ssh_utils import execute_ssh_command
 
 class DBAgent:
     def __init__(self):
-        self.db = DummyOracleDB()
         self.jira_client = JiraClient()
         self.llm_client = LLMClient()
 
@@ -36,8 +37,8 @@ class DBAgent:
         # as the final result comment is the most important.
         
         print(f"DB Agent: Connecting to {db_name}...")
-        # In a real scenario, db_name would determine which connection string to use
-        result = self.db.execute_query(query)
+        # Execute query via SSH
+        result = self.execute_ssh_query(db_name, query)
         
         # 3. Use LLM to format the result
         formatted_message = await self.llm_client.format_db_result(db_name, query, result)
@@ -46,12 +47,28 @@ class DBAgent:
         if result.get('status') == 'success' and result.get('data'):
             import csv
             import tempfile
+            import io
             
+            # Parse the CSV data from strings into lists of values
+            csv_content = "\n".join([result['columns'][0]] + result['data']) if result.get('columns') and isinstance(result['columns'], list) and len(result['columns']) == 1 else ""
+            
+            # Re-evaluating: the current result['columns'] is a list of header values, 
+            # and result['data'] is a list of CSV strings.
+            # Let's use a more robust approach:
+            all_rows = []
+            # Use csv reader to parse the data lines
+            reader = csv.reader(io.StringIO("\n".join(result['data'])))
+            for row in reader:
+                all_rows.append(row)
+            
+            # The headers are already separated in result['columns']
+            headers = result['columns']
+
             # Create a temporary CSV file
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', newline='') as tmp:
                 writer = csv.writer(tmp)
-                writer.writerow(result['columns'])
-                writer.writerows(result['data'])
+                writer.writerow(headers)
+                writer.writerows(all_rows)
                 csv_path = tmp.name
             
             try:
@@ -69,3 +86,62 @@ class DBAgent:
         self.jira_client.update_issue_status(issue_key, "51") # Transition to Closed
         
         return result
+
+    def execute_ssh_query(self, db_name: str, query: str):
+        """Executes a database query on a remote server via SSH using common ssh_utils."""
+        cfg = DB_SSH_CONFIGS.get(db_name)
+        if not cfg:
+            print(f"DB Agent: No SSH configuration found for database {db_name}")
+            return {"status": "error", "message": f"Configuration missing for DB: {db_name}", "data": None}
+
+        # Construct the command and wrap it in sh -c to ensure proper quote handling on the remote shell
+        # SQL Query (Arg 1) + Extra Args + Executor (e.g. python3) + Script Path
+        extra_args_str = " ".join(cfg.get('extra_args', []))
+        extra_args_suffix = f" {extra_args_str}" if extra_args_str else ""
+        
+        inner_command = f"{cfg['executor']} {cfg['script_path']} '{query}'{extra_args_suffix}"
+        remote_command = f"sh -c \"{inner_command}\""
+        
+        try:
+            print(f"DB Agent: Executing remote command via SSH: {remote_command}")
+            stdout, stderr, returncode = execute_ssh_command(
+                user=cfg['user'],
+                server=cfg['server'],
+                port=cfg['port'],
+                command=remote_command
+            )
+            
+            if returncode == 0:
+                # Split stdout into lines
+                lines = stdout.strip().split('\n') if stdout else []
+                if not lines:
+                    return {
+                        "status": "success",
+                        "data": [],
+                        "columns": [],
+                        "message": "Query executed successfully, but returned no data."
+                    }
+                
+                # The first line is the CSV header
+                columns = lines[0].split(',')
+                data = lines[1:]
+                
+                return {
+                    "status": "success",
+                    "data": data,
+                    "columns": columns,
+                    "message": "Query executed successfully via SSH"
+                }
+            else:
+                error_msg = stderr if stderr else stdout
+                return {
+                    "status": "error",
+                    "message": f"SSH Execution Error: {error_msg}",
+                    "data": None
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e),
+                "data": None
+            }
